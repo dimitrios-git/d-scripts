@@ -22,4 +22,4 @@ While this repository is primarily for my own use, I'm open to contributions and
 
 ## License
 
-These scripts are released under the MIT License. See `LICENSE` for more details.
+These scripts are released under the MIT License. See [LICENSE](/LICENSE) for more details.
