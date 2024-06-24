@@ -8,6 +8,24 @@ This script is designed to work on KDE Neon, but it should work on any Linux dis
 
 ## Installation
 
+### Automatic installation
+
+Run the `INSTALL.sh` script to automatically install the scripts.
+
+```bash
+./INSTALL.sh
+```
+
+### Manual installation
+
+1. Ensure the scripts have execution permissions.
+
+   ```bash
+   chmod +x ssh-agent-startup.sh
+   chmod +x ssh-import-startup.sh
+   chmod +x ssh-agent-shutdown.sh
+   ```
+
 1. Place the `ssh-agent-startup.sh` script under the `~/.config/plasma-workspace/env/` directory.
-1. Place the `ssh-import-startup.sh` script under the `~/.config/autostart-scripts/` directory.
+1. Place the `ssh-import-startup.sh` script under the `~/.config/autostart/` directory.
 1. Place the `ssh-agent-shutdown.sh` script under the `~/.config/plasma-workspace/shutdown/` directory.
