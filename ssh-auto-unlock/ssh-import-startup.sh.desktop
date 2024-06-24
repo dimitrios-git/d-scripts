@@ -1,0 +1,6 @@
+[Desktop Entry]
+Exec=~/.config/autostart/ssh-import-startup.sh
+Icon=application-x-shellscript
+Name=ssh-import-startup.sh
+Type=Application
+X-KDE-AutostartScript=true
