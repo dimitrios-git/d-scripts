@@ -51,7 +51,7 @@ print_usage() {
 	echo "Usage: $0 <directory> <file_extension> <container_format> <audio_streams_count> <languages> <subtitles> <hardware_acceleration> [-y]"
 	echo "<container_format> can be 'webm' or 'mp4'."
 	echo "<subtitles> can be 'enabled' or 'disabled'."
-	echo "<hardware_acceleration> can be 'none', 'vaapi', 'cuda', 'qsv', 'amf'."
+	echo "<hardware_acceleration> can be 'none', 'vaapi', 'nvenc', 'qsv', 'amf'."
 	echo "Use '-y' to automatically confirm all prompts. This will overwrite existing files without confirmation!"
 	echo "Example: $0 . mkv webm 1 eng disabled -y"
 }
@@ -71,6 +71,7 @@ check_number_of_arguments "$@"
 # Function to validate the input arguments
 validate_arguments() {
 	directory="$1"
+	directory="${directory%/}"
 	if [ ! -d "$directory" ]; then
 		echo "Error: Directory '$directory' not found."
 		exit 1
@@ -107,8 +108,8 @@ validate_arguments() {
 	fi
 
 	hardware_acceleration="$7"
-	if [[ ! "$hardware_acceleration" =~ ^(none|vaapi|cuda|qsv|amf)$ ]]; then
-		echo "Error: Invalid hardware acceleration option. Please use 'none', 'vaapi', 'cuda', 'qsv', or 'amf'."
+	if [[ ! "$hardware_acceleration" =~ ^(none|vaapi|nvenc|qsv|amf)$ ]]; then
+		echo "Error: Invalid hardware acceleration option. Please use 'none', 'vaapi', 'nvenc', 'qsv', or 'amf'."
 		exit 1
 	fi
 
@@ -123,17 +124,15 @@ validate_arguments() {
 			exit 1
 			fi
 			echo "Hardware acceleration is set to VAAPI." > /dev/null
-		elif [[ "$hardware_acceleration" == "cuda" ]]; then
-			echo "Hardware acceleration is set to CUDA."
-			echo "CUDA is not supported at the moment."
-			exit 1
-		elif [[ "$hardware_acceleration" == "qsv" ]]; then
-			echo "Hardware acceleration is set to QSV."
-			echo "QSV is not supported at the moment."
-			exit 1
-		elif [[ "$hardware_acceleration" == "amf" ]]; then
-			echo "Hardware acceleration is set to AMF."
-			echo "AMF is not supported at the moment."
+	elif [[ "$hardware_acceleration" == "nvenc" ]]; then
+		echo "Hardware acceleration is set to NVEnc."
+	elif [[ "$hardware_acceleration" == "qsv" ]]; then
+		echo "Hardware acceleration is set to QSV."
+		echo "QSV is not supported at the moment."
+		exit 1
+	elif [[ "$hardware_acceleration" == "amf" ]]; then
+		echo "Hardware acceleration is set to AMF."
+		echo "AMF is not supported at the moment."
 	fi
 
 	auto_confirm="n"
@@ -145,47 +144,94 @@ validate_arguments "$@"
 
 # Function to get terminal width
 get_terminal_width() {
-	stty size | cut -d ' ' -f2
+        stty size | cut -d ' ' -f2
 }
 
 # Function to draw the progress bar with time information
 draw_progress_bar() {
-	local current_time=$1  # Current progress time in milliseconds
-	local duration=$2  # Total duration in milliseconds
-	local start_time=$3  # Start time of the process
+    local current_time=$1  # Current progress time in milliseconds
+    local duration=$2  # Total duration in milliseconds
+    local start_time=$3  # Start time of the process
 
-	local now
-	now=$(date +%s)
-	local elapsed_time=$((now - start_time))
-	local progress
-	progress=$(echo "scale=2; $current_time * 100 / $duration" | bc | xargs printf "%.2f")
-	local width
-	width=$(get_terminal_width)
-	local padding=49 # Padding for time information and brackets
-	local bar_width=$((width - padding)) # Adjust width for time information and brackets
-	local completed
-	completed=$(echo "$progress * $bar_width / 100" | bc | xargs printf "%.0f")
+    # Validate that duration is greater than 0
+    if [ "$duration" -le 0 ]; then
+        echo "Error: Duration must be greater than 0." >&2
+        return
+    fi
 
-	printf "\r["  # Move the cursor to the beginning of the line
-	for ((i=0; i<completed; i++)); do printf "="; done
-	for ((i=completed; i<bar_width; i++)); do printf " "; done
+    local now
+    now=$(date +%s)
+    local elapsed_time=$((now - start_time))
 
-	# Avoid division by zero
-	local progress_nonzero
-	progress_nonzero=$(echo "$progress + 0.0001" | bc | xargs printf "%.4f")
-	local estimated_time
-	estimated_time=$(echo "$elapsed_time * 100 / $progress_nonzero" | bc | xargs printf "%.0f")
-	local remaining_time=$((estimated_time - elapsed_time))
+    # Ensure current_time and duration are valid numbers
+    if [ -z "$current_time" ] || [ -z "$duration" ] || ! [[ "$current_time" =~ ^[0-9]+$ ]] || ! [[ "$duration" =~ ^[0-9]+$ ]]; then
+        echo "Error: Invalid current_time or duration." >&2
+        return
+    fi
 
-	# Print the progress bar and time information
-	printf "] %.2f%% | %02dh:%02dm:%02ds elapsed, %02dh:%02dm:%02ds left" "$progress" $((elapsed_time/3600)) $((elapsed_time%3600/60)) $((elapsed_time%60)) $((remaining_time/3600)) $((remaining_time%3600/60)) $((remaining_time%60))
+    # Calculate progress (avoid division by zero)
+    local progress
+    progress=$(echo "scale=2; $current_time * 100 / $duration" | bc 2>/dev/null)
+    if [ -z "$progress" ] || [[ "$progress" =~ ^[[:space:]]*$ ]]; then
+        progress=0
+    fi
+
+    local width
+    width=$(get_terminal_width)
+    local padding=49 # Padding for time information and brackets
+    local bar_width=$((width - padding)) # Adjust width for time information and brackets
+
+    # Calculate completed portion of the bar
+    local completed
+    completed=$(echo "$progress * $bar_width / 100" | bc 2>/dev/null)
+    if [ -z "$completed" ] || [[ "$completed" =~ ^[[:space:]]*$ ]]; then
+        completed=0
+    fi
+
+    # Draw progress bar
+    printf "\r["  # Move the cursor to the beginning of the line
+    for ((i=0; i<completed; i++)); do printf "="; done
+    for ((i=completed; i<bar_width; i++)); do printf " "; done
+
+    # Avoid division by zero
+    local progress_nonzero
+    progress_nonzero=$(echo "$progress + 0.0001" | bc 2>/dev/null)
+    if [ -z "$progress_nonzero" ] || [[ "$progress_nonzero" =~ ^[[:space:]]*$ ]]; then
+        progress_nonzero=0.0001
+    fi
+
+    # Calculate estimated time and remaining time
+    local estimated_time=0
+    if (( $(echo "$progress_nonzero > 0" | bc -l) )); then
+        estimated_time=$(echo "$elapsed_time * 100 / $progress_nonzero" | bc 2>/dev/null)
+    fi
+
+    local remaining_time=$((estimated_time - elapsed_time))
+
+    # Handle negative remaining time
+    if (( remaining_time < 0 )); then
+        remaining_time=0
+    fi
+
+    # Print progress percentage and time info using awk for formatting
+    local progress_formatted
+    progress_formatted=$(echo "$progress" | awk '{printf "%.2f", $1}')
+
+    local elapsed_h=$((elapsed_time/3600))
+    local elapsed_m=$((elapsed_time%3600/60))
+    local elapsed_s=$((elapsed_time%60))
+    local remaining_h=$((remaining_time/3600))
+    local remaining_m=$((remaining_time%3600/60))
+    local remaining_s=$((remaining_time%60))
+
+    printf "] %s%% | %02dh:%02dm:%02ds elapsed, %02dh:%02dm:%02ds left" "$progress_formatted" "$elapsed_h" "$elapsed_m" "$elapsed_s" "$remaining_h" "$remaining_m" "$remaining_s"
 }
 
 # Handler for terminal resize
 handle_resize() {
-	if [ -n "$current_time" ] && [ -n "$duration" ]; then
-		draw_progress_bar "$current_time" "$duration" "$start_time"
-	fi
+        if [ -n "$current_time" ] && [ -n "$duration" ]; then
+                draw_progress_bar "$current_time" "$duration" "$start_time"
+        fi
 }
 
 # Trap SIGWINCH signal
@@ -636,57 +682,41 @@ process_files() {
 		# after determining the modified bitrate, check against recommended bitrate
 		video_bitrate=$(check_bitrate_against_recommended "$video_bitrate" "$bitrate_recommended")
 
+		# Construct the ffmpeg command
 		if [[ "$container_format" == "webm" ]]; then
-			# Set ffmpeg_cmd for VP9 and WebM
-			ffmpeg_cmd="ffmpeg -i '$input_file' -map 0 -map -0:a -map -0:d? -c:v libvpx-vp9 -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -speed 1 -tile-columns 6 -frame-parallel 1 -auto-alt-ref 1 -lag-in-frames 25 -metadata title='$(basename -s .$file_extension "$input_file")'"
-			audio_codec="libopus" # TODO: libopus fails with some audio codecs, libvorbis is a good alternative. Think of a way to handle this automatically.
+		    ffmpeg_cmd="ffmpeg -i \"$input_file\" -map 0 -map -0:a -map -0:d? -c:v libvpx-vp9 -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -speed 1 -tile-columns 6 -frame-parallel 1 -auto-alt-ref 1 -lag-in-frames 25 -metadata title=\"$(basename -s .$file_extension "$input_file")\""
+		    audio_codec="libopus"
 		elif [[ "$container_format" == "mp4" ]]; then
-			if [[ "$hardware_acceleration" == "none" ]]; then
-				ffmpeg_cmd="ffmpeg -i '$input_file' -map 0 -map -0:a -map -0:d? -c:v libx264 -profile:v high -level:v 4.2 -bf 2 -g $gop_size -coder 1 -movflags +faststart -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -pix_fmt yuv420p -preset veryslow -metadata title='$(basename -s .$file_extension "$input_file")'"
-			elif [[ "$hardware_acceleration" == "vaapi" ]]; then
-				# Determine the QP value based on the bitrate cap
-				local qp_value
-				echo "Calculating QP value based on the target bitrate: $video_bitrate kbps. Generating samples in the background. This may take several minutes..."
-				qp_value=$(get_qp_from_video_bitrate "$input_file" "$video_bitrate")
-				ffmpeg_cmd="ffmpeg -vaapi_device /dev/dri/renderD128 -i '$input_file' -map 0 -map -0:a -map -0:d? -vf 'format=nv12,hwupload' -c:v h264_vaapi -bf 2 -g $gop_size -coder 1 -movflags +faststart -qp '$qp_value' -metadata title='$(basename -s .$file_extension "$input_file")'"
-			elif [[ "$hardware_acceleration" == "cuda" ]]; then
-				echo "CUDA is not supported at the moment."
-				exit 1
-			elif [[ "$hardware_acceleration" == "qsv" ]]; then
-				echo "QSV is not supported at the moment."
-				exit 1
-			elif [[ "$hardware_acceleration" == "amf" ]]; then
-				echo "AMF is not supported at the moment."
-				exit 1
-			fi
-			audio_codec="aac"
-		else
-			echo "Unsupported container format: $container_format. Exiting..."
-			exit 1
+		    if [[ "$hardware_acceleration" == "none" ]]; then
+		        ffmpeg_cmd="ffmpeg -i \"$input_file\" -map 0 -map -0:a -map -0:d? -c:v libx264 -profile:v high -level:v 4.2 -bf 2 -g $gop_size -coder 1 -movflags +faststart -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -pix_fmt yuv420p -preset veryslow -metadata title=\"$(basename -s .$file_extension "$input_file")\""
+		    elif [[ "$hardware_acceleration" == "nvenc" ]]; then
+		        ffmpeg_cmd="ffmpeg -i \"$input_file\" -map 0 -map -0:a -map -0:d? -c:v h264_nvenc -bf 2 -g $gop_size -coder 1 -movflags +faststart -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -pix_fmt yuv420p -preset slow -metadata title=\"$(basename -s .$file_extension "$input_file")\""
+		    fi
+		    audio_codec="aac"
 		fi
-
-		# Add audio and subtitle options to ffmpeg_cmd
+		
+		# Add audio and subtitle options as before
 		local IFS=' '
 		read -r -a languages_array <<< "$languages"
 		if [ "$audio_streams_count" -gt 0 ] && [ ${#languages_array[@]} -gt 0 ]; then
-			for (( i=0; i<audio_streams_count; i++ )); do
-				local language_index=$((i % ${#languages_array[@]}))
-				local language="${languages_array[$language_index]}"
-				ffmpeg_cmd+=" -map 0:a:$i -metadata:s:a:$i language=$language -c:a:$i $audio_codec"
-			done
+		    for (( i=0; i<audio_streams_count; i++ )); do
+		        local language_index=$((i % ${#languages_array[@]}))
+		        local language="${languages_array[$language_index]}"
+		        ffmpeg_cmd+=" -map 0:a:$i -metadata:s:a:$i language=$language -c:a:$i $audio_codec"
+		    done
 		fi
-
-		if [ "$subtitles" == "enabled" ]; then
-			ffmpeg_cmd+=" -c:s copy"
-		elif [ "$subtitles" == "disabled" ]; then
-			ffmpeg_cmd+=" -sn"
-		else
-			echo "Invalid subtitle option. Please use 'enabled' or 'disabled'. Exiting..."
-			exit 1
-		fi
-
-		ffmpeg_cmd+=" '$output_file'"
 		
+		if [ "$subtitles" == "enabled" ]; then
+		    ffmpeg_cmd+=" -c:s copy"
+		elif [ "$subtitles" == "disabled" ]; then
+		    ffmpeg_cmd+=" -sn"
+		else
+		    echo "Invalid subtitle option. Please use 'enabled' or 'disabled'. Exiting..."
+		    exit 1
+		fi
+		
+		ffmpeg_cmd+=" \"$output_file\""
+
 		# Get the duration of the input file and validate it
 		local duration
 		duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$input_file")
@@ -698,7 +728,7 @@ process_files() {
 		# Concatenate progress file path
 		progress_file="${output_file}.log"
 		# Add -progress option to ffmpeg_cmd
-		ffmpeg_cmd+=" -progress '$progress_file'"
+		ffmpeg_cmd+=" -progress \"$progress_file\""
 		
 		# Handle user confirmation and execution
 		execute_ffmpeg=0  # Flag to determine if FFmpeg should be executed
