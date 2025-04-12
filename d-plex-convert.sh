@@ -49,7 +49,7 @@ check_required_apps
 # Function to print script usage
 print_usage() {
 	echo "Usage: $0 <directory> <file_extension> <container_format> <audio_streams_count> <languages> <subtitles> <hardware_acceleration> [-y]"
-	echo "<container_format> can be 'webm' or 'mp4'."
+	echo "<container_format> can be 'webm', 'mkv' or 'mp4'."
 	echo "<subtitles> can be 'enabled' or 'disabled'."
 	echo "<hardware_acceleration> can be 'none', 'vaapi', 'nvenc', 'qsv', 'amf'."
 	echo "Use '-y' to automatically confirm all prompts. This will overwrite existing files without confirmation!"
@@ -84,8 +84,8 @@ validate_arguments() {
 	fi
 
 	container_format="$3"
-	if [[ ! "$container_format" =~ ^(webm|mp4)$ ]]; then
-		echo "Error: Invalid container format. Supported formats: webm, mp4."
+	if [[ ! "$container_format" =~ ^(webm|mp4|mkv)$ ]]; then
+		echo "Error: Invalid container format. Supported formats: webm, mkv, mp4."
 		exit 1
 	fi
 
@@ -439,6 +439,8 @@ generate_output_filename() {
 		output_file="${directory}/${filename_without_extension}.webm"
 	elif [[ "$container_format" == "mp4" ]]; then
 		output_file="${directory}/${filename_without_extension}.mp4"
+  elif [[ "$container_format" == "mkv" ]]; then
+    output_file="${directory}/${filename_without_extension}.mkv"
 	fi
 
 	# Check if the output file is the same as the input file and add a suffix if needed
@@ -537,7 +539,7 @@ modify_video_bitrate() {
 		elif [[ "$video_codec" =~ VP9|vp9 ]]; then
 			video_bitrate=$(echo "$video_bitrate * 1" | bc | xargs printf "%.0f")  # No change needed, but included for clarity
 		fi
-	elif [[ "$container_format" == "mp4" ]]; then
+	elif [[ "$container_format" == "mp4" || "$container_format" == "mkv" ]]; then
 		if [[ "$video_codec" =~ HEVC|hevc ]]; then
 			video_bitrate=$(echo "$video_bitrate * 1.3" | bc | xargs printf "%.0f")
 		elif [[ "$video_codec" =~ VP9|vp9 ]]; then
@@ -682,15 +684,19 @@ process_files() {
 		# after determining the modified bitrate, check against recommended bitrate
 		video_bitrate=$(check_bitrate_against_recommended "$video_bitrate" "$bitrate_recommended")
 
+    # escape the input and output file paths
+    input_file_escaped=$(printf "%q" "$input_file")
+    output_file_escaped=$(printf "%q" "$output_file")
+
 		# Construct the ffmpeg command
 		if [[ "$container_format" == "webm" ]]; then
-		    ffmpeg_cmd="ffmpeg -i \"$input_file\" -map 0 -map -0:a -map -0:d? -c:v libvpx-vp9 -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -speed 1 -tile-columns 6 -frame-parallel 1 -auto-alt-ref 1 -lag-in-frames 25 -metadata title=\"$(basename -s .$file_extension "$input_file")\""
+		    ffmpeg_cmd="ffmpeg -i $input_file_escaped -map 0 -map -0:a -map -0:d? -c:v libvpx-vp9 -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -speed 1 -tile-columns 6 -frame-parallel 1 -auto-alt-ref 1 -lag-in-frames 25 -metadata title=\"$(basename -s .$file_extension "$input_file")\""
 		    audio_codec="libopus"
-		elif [[ "$container_format" == "mp4" ]]; then
+		elif [[ "$container_format" == "mp4" || "$container_format" == "mkv" ]]; then
 		    if [[ "$hardware_acceleration" == "none" ]]; then
-		        ffmpeg_cmd="ffmpeg -i \"$input_file\" -map 0 -map -0:a -map -0:d? -c:v libx264 -profile:v high -level:v 4.2 -bf 2 -g $gop_size -coder 1 -movflags +faststart -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -pix_fmt yuv420p -preset veryslow -metadata title=\"$(basename -s .$file_extension "$input_file")\""
+		        ffmpeg_cmd="ffmpeg -i $input_file_escaped -map 0 -map -0:a -map -0:d? -c:v libx264 -profile:v high -level:v 4.2 -bf 2 -g $gop_size -coder 1 -movflags +faststart -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -pix_fmt yuv420p -preset veryslow -metadata title=\"$(basename -s .$file_extension "$input_file")\""
 		    elif [[ "$hardware_acceleration" == "nvenc" ]]; then
-		        ffmpeg_cmd="ffmpeg -i \"$input_file\" -map 0 -map -0:a -map -0:d? -c:v h264_nvenc -bf 2 -g $gop_size -coder 1 -movflags +faststart -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -pix_fmt yuv420p -preset slow -metadata title=\"$(basename -s .$file_extension "$input_file")\""
+		        ffmpeg_cmd="ffmpeg -i $input_file_escaped -map 0 -map -0:a -map -0:d? -c:v h264_nvenc -bf 2 -g $gop_size -coder 1 -movflags +faststart -b:v ${video_bitrate}k -maxrate $((video_bitrate*2))k -bufsize $((video_bitrate*4))k -pix_fmt yuv420p -preset slow -metadata title=\"$(basename -s .$file_extension "$input_file")\""
 		    fi
 		    audio_codec="aac"
 		fi
@@ -715,7 +721,7 @@ process_files() {
 		    exit 1
 		fi
 		
-		ffmpeg_cmd+=" \"$output_file\""
+		ffmpeg_cmd+=" $output_file_escaped"
 
 		# Get the duration of the input file and validate it
 		local duration
@@ -727,8 +733,12 @@ process_files() {
 
 		# Concatenate progress file path
 		progress_file="${output_file}.log"
+
+    # Escape the progress file path
+    progress_file_escaped=$(printf "%q" "$progress_file")
+
 		# Add -progress option to ffmpeg_cmd
-		ffmpeg_cmd+=" -progress \"$progress_file\""
+		ffmpeg_cmd+=" -progress $progress_file_escaped"
 		
 		# Handle user confirmation and execution
 		execute_ffmpeg=0  # Flag to determine if FFmpeg should be executed
